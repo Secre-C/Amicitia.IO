@@ -86,7 +86,7 @@ namespace Amicitia.IO.Binary
 
         public T Read<T>() where T : unmanaged
         {
-            var value = ReadNative<T>();
+            ReadNative<T>( out var value );
             if ( Unsafe.SizeOf<T>() != 1 && IsSwappingNeeded() )
                 BinaryOperations<T>.Reverse( ref value );
 
@@ -107,7 +107,7 @@ namespace Amicitia.IO.Binary
         /// <returns></returns>
         public T ReadLittle<T>() where T : unmanaged
         {
-            var value = ReadNative<T>();
+            ReadNative<T>( out var value );
             if ( Unsafe.SizeOf<T>() != 1 && !BitConverter.IsLittleEndian )
                 BinaryOperations<T>.Reverse( ref value );
 
@@ -133,7 +133,7 @@ namespace Amicitia.IO.Binary
         /// <returns></returns>
         public T ReadBig<T>() where T : unmanaged
         {
-            var value = ReadNative<T>();
+            ReadNative<T>( out var value );
             if ( Unsafe.SizeOf<T>() != 1 && BitConverter.IsLittleEndian )
                 BinaryOperations<T>.Reverse( ref value );
 
@@ -160,7 +160,7 @@ namespace Amicitia.IO.Binary
             return value;
         }
 
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public void ReadNative<T>( out T value ) where T : unmanaged
         {
             if ( typeof( T ) == typeof( byte ) || typeof( T ) == typeof( sbyte ) )
@@ -255,6 +255,8 @@ namespace Amicitia.IO.Binary
         {
             Span<byte> data;
 
+            bool isUnicode = encoding == Encoding.Unicode || encoding == Encoding.BigEndianUnicode;
+
             switch ( format )
             {
                 case StringBinaryFormat.NullTerminated:
@@ -263,13 +265,34 @@ namespace Amicitia.IO.Binary
                             mTempBuffer = new byte[TEMP_BUFFER_SIZE];
 
                         int i = 0;
-                        byte b;
-                        while ( ( b = Read<byte>() ) != 0 )
-                        {
-                            if ( i >= mTempBuffer.Length )
-                                Array.Resize( ref mTempBuffer, mTempBuffer.Length * 2 );
 
-                            mTempBuffer[i++] = b;
+                        void CheckTempBuffer()
+                        {
+                            if ( i < mTempBuffer.Length )
+                                return;
+
+                            Array.Resize( ref mTempBuffer, mTempBuffer.Length * 2 );
+                        }
+
+                        if ( isUnicode )
+                        {
+                            ushort us;
+                            while ( ( us = ReadLittle<ushort>() ) != 0 )
+                            {
+                                CheckTempBuffer();
+                                mTempBuffer[i++] = (byte)(us & 0xFF);
+                                CheckTempBuffer();
+                                mTempBuffer[i++] = (byte)((us >> 8) & 0xFF);
+                            }
+                        }
+                        else
+                        {
+                            byte b;
+                            while ( ( b = Read<byte>() ) != 0 )
+                            {
+                                CheckTempBuffer();
+                                mTempBuffer[i++] = b;
+                            }
                         }
 
                         data = new Span<byte>( mTempBuffer, 0, i );
@@ -278,7 +301,7 @@ namespace Amicitia.IO.Binary
 
                 case StringBinaryFormat.FixedLength:
                     {
-                        if ( fixedLength == -1 )
+                        if ( fixedLength < 0 )
                             throw new ArgumentException( "Invalid fixed length specified" );
 
                         InternalReadBytes( fixedLength, out var buffer );
@@ -289,7 +312,11 @@ namespace Amicitia.IO.Binary
                         {
                             if ( buffer[i] == 0 )
                             {
+                                if ( isUnicode && i + 1 < buffer.Length && buffer[i + 1] != 0 )
+                                    continue;
+
                                 length = i;
+
                                 break;
                             }
                         }
